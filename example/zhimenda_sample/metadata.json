@@ -1,0 +1,19 @@
+{
+  "basin_name": "zhimenda",
+  "station_name": "直门达",
+  "sample_type": "basin_mean_1x1",
+  "years": [
+    1982,
+    2019
+  ],
+  "description": "Lightweight basin-mean CRSEM example derived from the prepared Zhimenda gridded drivers. The full gridded dynamic.nc is intentionally not stored in GitHub.",
+  "s_area_m2": 158175178449.67828,
+  "s_area_km2": 158175.1784496783,
+  "n_grid_cells_source": 222965,
+  "files": {
+    "static_nc": "drivers/static.nc",
+    "dynamic_nc": "drivers/dynamic.nc",
+    "observations_nc": "drivers/observations.nc",
+    "params_json": "params_1982_2000_kge_pbias_m120.json"
+  }
+}

@@ -1,0 +1,37 @@
+﻿# Runtime configuration for pre-prepared NetCDF datasets
+# This is the recommended format for CRSEM v2.0+
+#
+# Usage:
+#   python _scripts/calibrate_parameters.py \
+#     --config config/prepared_datasets.example.yml \
+#     --static-nc outputs/tuotuohe/drivers/static.nc \
+#     --dynamic-nc outputs/tuotuohe/drivers/dynamic.nc \
+#     --observations-nc outputs/tuotuohe/drivers/observations.nc
+
+# Prepared dataset paths (required)
+prepared_dataset:
+  # Path to static.nc containing K, LS, IC, P_f, mask
+  static_nc: "outputs/tuotuohe/drivers/static.nc"
+
+  # Path to dynamic.nc containing T, Pre, NDVI with time dimension
+  dynamic_nc: "outputs/tuotuohe/drivers/dynamic.nc"
+
+  # Path to observations.nc containing Q and SSF
+  observations_nc: "outputs/tuotuohe/drivers/observations.nc"
+
+  # Basin name for metadata
+  basin_name: "tuotuohe"
+
+  # Station name (may differ from basin_name)
+  station_name: "沱沱河"
+
+# Dataset metadata (optional, for reference)
+datasets:
+  meteorological_dataset: "ERA5-Land"
+  ndvi_dataset: "AVHRR_GIMMS"
+
+# Provenance information
+extras:
+  prepared_with_version: "2.0"
+  preparation_date: "2026-03-27"
+  data_sources_config: "config/basin_data_sources.tuotuohe.yml"

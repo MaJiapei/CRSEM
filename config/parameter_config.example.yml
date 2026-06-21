@@ -1,0 +1,75 @@
+# CRSEM Model Parameter Configuration Example
+# Copy this file and modify parameter values, bounds, and penalty settings as needed
+#
+# Usage:
+#   python _scripts/calibrate_parameters.py \
+#     --static-nc outputs/basin/static.nc \
+#     --dynamic-nc outputs/basin/dynamic.nc \
+#     --observations-nc outputs/basin/observations.nc \
+#     --config config/parameter_config.custom.yml
+
+model_type: crsem
+
+# Default parameter values for initialization
+# These values are used as starting points for calibration
+defaults:
+  # R-factor parameters (rainfall and snowmelt erosivity)
+  a_rain: 0.5          # Rainfall erosivity coefficient
+  r_th: 1              # Rainfall erosivity threshold (mm)
+  a_melt: 0.1          # Snowmelt erosivity coefficient
+  m_th: 0              # Snowmelt erosivity threshold (mm)
+  k_melt: 3.0          # Degree-day factor (mm/°C/day)
+
+  # K-factor parameters (soil erodibility)
+  alpha_K: 0.35        # Freeze-thaw enhancement coefficient
+  K_min_r: 0.7         # Minimum K-factor ratio
+  K_max_r: 1.5         # Maximum K-factor ratio
+
+  # C-factor parameters (vegetation cover)
+  alpha_C: 2           # NDVI-to-C conversion coefficient
+
+  # SDR parameters (sediment delivery ratio)
+  ic0: 0.5             # SDR inflection point IC value
+  k: 2.5               # SDR curve shape parameter
+  beta_sdr: 0.5        # SDR precipitation dynamic coefficient
+
+  # Channel erosion parameters
+  c_base: 0.1          # Base channel transport coefficient
+  n_chan: 1.8          # Flow exponent
+  K_chan: 0.5          # Channel erodibility coefficient
+
+# Parameter bounds for optimization
+# Format: parameter_name: [min_value, max_value]
+bounds:
+  a_rain: [0.5, 1.0]
+  r_th: [1, 20]
+  a_melt: [0.1, 1.0]
+  m_th: [0, 10]
+  k_melt: [1.0, 5.0]
+  alpha_K: [0.1, 0.8]
+  K_min_r: [0.4, 1.0]
+  K_max_r: [1.0, 2.0]
+  alpha_C: [1.0, 5.0]
+  ic0: [0.1, 1.0]
+  k: [0.5, 4.0]
+  beta_sdr: [0.3, 1.0]
+  c_base: [0.1, 20.0]
+  n_chan: [1.0, 2.0]
+  K_chan: [0.1, 1.0]
+
+# Penalty settings for calibration
+# Penalties constrain parameter values to physically reasonable ranges
+penalties:
+  # Channel erosion ratio penalty
+  # Constrains the ratio of channel erosion to total sediment flux
+  channel_ratio:
+    enabled: true
+    lower_bound: -0.6    # Allow some deposition (negative values)
+    upper_bound: 0.3     # Limit channel erosion contribution
+
+  # Annual R-factor penalty
+  # Constrains the annual rainfall erosivity to reasonable ranges
+  annual_r_factor:
+    enabled: true
+    lower_normal: 100.0  # Minimum annual R-factor (MJ·mm/(ha·h·yr))
+    upper_normal: 200.0  # Maximum annual R-factor (MJ·mm/(ha·h·yr))

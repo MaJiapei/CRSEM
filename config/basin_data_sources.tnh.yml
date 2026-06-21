@@ -1,0 +1,87 @@
+# Data source paths configuration
+# This file defines paths to raw data sources for basin data preparation
+#
+# Usage:
+#   # With year range (crop data)
+#   python _scripts/prepare_basin_drivers.py \
+#     --config config/basin_data_sources.tuotuohe.yml \
+#     --basin tuotuohe \
+#     --years 1990 2000 \
+#     --output outputs/tuotuohe_1990_2000
+#
+#   # Without year range (use full data)
+#   python _scripts/prepare_basin_drivers.py \
+#     --config config/basin_data_sources.tuotuohe.yml \
+#     --basin tuotuohe \
+#     --output outputs/tuotuohe_full
+#
+# Multi-dataset support:
+#   For NDVI or meteorological data, you can specify multiple datasets
+#   using comma-separated names.
+#
+#   - NDVI datasets are stacked as ensemble members in dynamic.nc.
+#   - Meteorological datasets are not yet stacked; the first dataset is
+#     used as the primary forcing, and all requested datasets' time
+#     ranges are recorded in metadata.json.
+#
+#   Example:
+#     datasets:
+#       meteorological: "ERA5-Land,TerraClimate"
+#       ndvi: "AVHRR_GIMMS,MODIS"
+
+# Basin-specific configurations
+basins:
+  tangnaihai:
+    name: "唐乃亥"
+    basin_template: "example/tangnaihai/sources/intermediate/basin_static.nc"
+    observation_csv: "/mnt/h/datasets/观测数据/水沙/黄河源/台站月汇总_csv/唐乃亥站.csv"
+
+    # Static data paths
+    static:
+      k_file: "example/tuotuohe_1990_2000/sources/K_combine_1km.nc"
+      ls_file: "example/tuotuohe_1990_2000/sources/LS_1km.nc"
+      ic_file: "/mnt/g/RTS_route/soil_erosion/IC/IC_all.tif"
+
+    # Dynamic data paths
+    dynamic:
+      meteo_file: "/mnt/h/datasets/TerraClimate/TerraClimate_2t_tp.nc"
+      ndvi_file: "/mnt/g/RTS_route/soil_erosion/NDVI_merged_TP.nc"
+
+    varnames:
+      meteo: ["tmean", "ppt"]
+      ndvi: ["NDVI"]
+
+    # Dataset selections
+    datasets:
+      meteorological: "TerraClimate"
+      ndvi: "AVHRR_GIMSS"
+
+  # Example for adding another basin
+  # changjiangyuan:
+  #   name: "长江源"
+  #   basin_template: "/path/to/basin_template.nc"
+  #   observation_csv: "/path/to/observations.csv"
+  #   static:
+  #     k_file: "..."
+  #     ls_file: "..."
+  #     ic_file: "..."
+  #   dynamic:
+  #     meteo_file: "..."
+  #     ndvi_file: "..."
+  #   datasets:
+  #     meteorological: "TerraClimate"
+  #     ndvi: "MOD13Q1"
+
+# Global settings
+settings:
+  # Cell size in km (used for area calculation)
+  cell_size_km: 1.0
+
+  # Default coordinate system
+  default_crs: "EPSG:32646"
+
+  # Data quality thresholds
+  quality:
+    min_time_coverage: 0.95    # Minimum time coverage (95%)
+    max_missing_rate: 0.05     # Maximum missing data rate (5%)
+    max_consecutive_missing: 3  # Maximum consecutive missing months

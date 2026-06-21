@@ -1,0 +1,9 @@
+numpy
+pandas
+xarray
+scipy
+matplotlib
+numba
+PyYAML
+netCDF4
+pytest
