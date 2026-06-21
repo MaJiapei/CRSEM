@@ -780,77 +780,114 @@ python scripts/plot_ssf_comparison.py \
 | R² | 决定系数 |
 | n | 数据点数 |
 
-## 6. 驱动变量归因分析
+## 6. 植被变绿减侵蚀模拟
 
-使用 [`scripts/attribution_analysis.py`](/mnt/d/code/sediment/scripts/attribution_analysis.py) 可以定量分析 `NDVI`、`T` 或 `Pre` 的变化对流域坡面侵蚀入河量变化的贡献。该脚本与 [`CRSEM/sensitivity.py`](/mnt/d/code/sediment/CRSEM/sensitivity.py) 不同，后者回答的是“敏感性和相对重要性”，而不是“累计贡献量”。
+植被变绿减侵蚀模拟回答的是“相对于一个没有持续变绿信号的反事实 NDVI 序列，实际 NDVI 变化使坡面侵蚀减少了多少”。它不同于 [`CRSEM/sensitivity.py`](../CRSEM/sensitivity.py) 的敏感性分析：敏感性分析回答变量重要性，减蚀模拟回答累计贡献量。
 
-**方法说明：**
+**基本思路：**
 
-- 真实情景：使用原始驱动序列运行模型
-- 反事实情景：将目标变量替换为基准期气候态季节循环
-- 贡献定义：`ΔE = E_real - E_counterfactual`
-- 模型入口：固定使用 `run_hillslope`，不考虑 `Q` 和河道输移过程
+- 实际情景：使用原始 `NDVI` 序列运行坡面侵蚀模块
+- 反事实情景：将 `NDVI` 替换为基准期逐月气候态，例如 1982-2000 年每个自然月的平均 NDVI
+- 减蚀定义：`reduction = E_counterfactual - E_real`
+- 若 `reduction > 0`，表示实际植被状态相对于基准期气候态降低了侵蚀
+- 推荐使用 `run_hillslope`，只分析坡面侵蚀过程，不把河道输沙和流量 `Q` 的影响混入植被贡献
 
-对于 `NDVI` 集合驱动，归因脚本会逐个 `ndvi_member` 运行，再合并为统一输出。这和标准率定/标准模拟不同：后两者会先把 NDVI 成员折叠为均值场，再进入模型。
+### 6.1 直门达轻量案例
 
-```bash
-python scripts/attribution_analysis.py \
-  --static example/tuotuohe/drivers/static.nc \
-  --dynamic example/tuotuohe/drivers/dynamic.nc \
-  --params example/tuotuohe_1990_2000/params.json \
-  --variable NDVI \
-  --analysis-start 1987 \
-  --analysis-end 2022 \
-  --baseline-start 1987 \
-  --baseline-end 2000 \
-  --output-dir example/tuotuohe/attribution
+下面示例使用仓库内置的 [`example/zhimenda_sample`](../example/zhimenda_sample) 数据，估算 2001-2019 年实际 NDVI 相对于 1982-2000 年 NDVI 逐月气候态的减蚀量。需要注意：该 `drivers/` 目录不是完整二维空间格网数据，而是从完整直门达网格驱动聚合得到的流域平均样例；NetCDF 中保留 `y=1, x=1` 的最小空间维度，但本质上等价于一维时间序列驱动。它适合演示完整计算流程和检查代码能否运行；正式空间研究应使用完整网格 driver 数据。
+
+```python
+from pathlib import Path
+
+import xarray as xr
+
+from CRSEM.batch_runner import run_parameter_batch
+from CRSEM.contracts import ParameterBatch
+from CRSEM.driver import BasinDriver
+
+base = Path("example/zhimenda_sample")
+
+# 1. 读取直门达样例，并折叠 NDVI 多数据源成员。
+#    example/zhimenda_sample/drivers 是 1x1 流域平均样例，
+#    本质上是一维时间序列 driver，不是完整二维网格 driver。
+driver = BasinDriver.from_nc_files(
+    static_nc=base / "drivers/static.nc",
+    dynamic_nc=base / "drivers/dynamic.nc",
+    observations_nc=base / "drivers/observations.nc",
+    station_name="zhimenda",
+).collapse_ndvi_members()
+
+# 2. 转为流域平均点模式。减蚀分析只用坡面过程，不需要保留 Q/SSF。
+driver = driver.to_point_driver(keep_rivers=False)
+
+# 3. 构造实际情景和反事实情景。
+#    反事实情景把 2001-2019 年 NDVI 替换成 1982-2000 年逐月气候态。
+real_driver = driver.crop_time_range(2001, 2019, align_to_obs=False)
+cf_driver = driver.to_cf_driver(
+    "NDVI",
+    baseline_start=1982,
+    baseline_end=2000,
+).crop_time_range(2001, 2019, align_to_obs=False)
+
+# 4. 读取率定参数集合，分别运行实际情景和反事实情景。
+params, _ = ParameterBatch.from_file(
+    base / "params_1982_2000_kge_pbias_m120.json"
+)
+real_result = run_parameter_batch(
+    "crsem",
+    real_driver,
+    params,
+    run_method="run_hillslope",
+)
+cf_result = run_parameter_batch(
+    "crsem",
+    cf_driver,
+    params,
+    run_method="run_hillslope",
+)
+
+real = real_result.to_dataset()
+cf = cf_result.to_dataset()
+
+# 5. 计算月、年和累计减蚀量。
+#    E_hillslope 的单位是 t ha-1 month-1；
+#    driver.s_area 是流域面积，单位是 ha。
+monthly_reduction = cf["E_hillslope"] - real["E_hillslope"]
+annual_reduction = monthly_reduction.groupby("time.year").sum("time")
+
+if real_result.weights is not None:
+    weights = xr.DataArray(
+        real_result.weights,
+        dims=("member",),
+        coords={"member": annual_reduction.member},
+    )
+else:
+    weights = xr.ones_like(annual_reduction.isel(year=0)) / annual_reduction.sizes["member"]
+
+weighted_annual = (annual_reduction * weights).sum("member")
+cumulative_reduction_t = (weighted_annual * float(driver.s_area)).cumsum("year")
+
+print("Mean annual reduction (t ha-1 yr-1):", float(weighted_annual.mean()))
+print("Cumulative reduction (t):", float(cumulative_reduction_t.isel(year=-1)))
 ```
 
-**参数说明：**
+在当前轻量样例中，上述脚本会得到一个正的累计减蚀量，表示 2001-2019 年实际 NDVI 相对 1982-2000 年 NDVI 气候态整体降低了坡面侵蚀。由于这是 1x1 流域平均样例，数值主要用于演示方法；正式研究应使用完整空间网格驱动，并对 NDVI 数据源、参数集合和基准期选择做不确定性分析。
 
-| 参数 | 含义 |
-|------|------|
-| `--static` | 驱动目录中的 `static.nc` |
-| `--dynamic` | 驱动目录中的 `dynamic.nc` |
-| `--observations` | 可选的 `observations.nc`；当前归因流程不会使用其中的 `Q` 或 `SSF` |
-| `--params` | 率定得到的参数集合 `params.json` |
-| `--variable` | 要归因的变量，支持 `NDVI`、`T`、`Pre` |
-| `--analysis-start` / `--analysis-end` | 归因模拟时间范围；默认使用 `dynamic.nc` 的完整时间范围 |
-| `--baseline-start` / `--baseline-end` | 反事实构造所用基准期 |
-| `--output-dir` | 结果输出目录 |
-| `--no-point-mode` | 保持网格维而非转换到流域平均点模式 |
+### 6.2 结果解读
 
-**输出变量：**
+| 量 | 含义 | 单位 |
+|----|------|------|
+| `monthly_reduction` | 月尺度坡面侵蚀模数减少量，`E_cf - E_real` | `t ha-1 month-1` |
+| `annual_reduction` | 年尺度坡面侵蚀模数减少量 | `t ha-1 yr-1` |
+| `weighted_annual` | 对参数集合加权后的年减蚀量 | `t ha-1 yr-1` |
+| `cumulative_reduction_t` | 年减蚀量乘以流域面积后的累计总减蚀量 | `t` |
 
-| 变量 | 含义 | 单位 |
-|------|------|------|
-| `delta_annual` | 年尺度贡献；若输出包含 `E_hillslope`，默认表示坡面侵蚀模数变化 | `t ha-1 yr-1` |
-| `delta_cumulative` | 将 `delta_annual` 乘以流域面积换算到总量后累计求和 | `t` |
+解读时注意：
 
-**维度说明：**
-
-- `time`: 年尺度时间轴
-- `member`: 参数集合成员
-- `ndvi_member`: NDVI 集合成员，仅在 `NDVI` 为多成员输入时存在
-
-**结果解读：**
-
-- `delta_cumulative < 0` 表示相对于基准期气候态，变量变化带来了累计减蚀效应
-- `delta_cumulative > 0` 表示累计增蚀效应
-- 如果需要单一流域结论，通常应先对 `member` 做参数权重平均，再比较不同 `ndvi_member`
-
-仓库已附带一个沱沱河示例结果文件：
-
-- [`example/tuotuohe/attribution/attribution_NDVI_1987_2000.nc`](/mnt/d/code/sediment/example/tuotuohe/attribution/attribution_NDVI_1987_2000.nc)
-
-归因结果可继续使用 [`scripts/plot_ndvi_attribution_analysis.py`](/mnt/d/code/sediment/scripts/plot_ndvi_attribution_analysis.py) 生成三联图：
-
-```bash
-python scripts/plot_ndvi_attribution_analysis.py \
-  --attribution-nc example/tuotuohe/attribution/attribution_NDVI_1987_2000.nc \
-  --dynamic-nc example/tuotuohe/drivers/dynamic.nc \
-  --output example/tuotuohe/attribution/attribution_NDVI_1987_2000.png
-```
+- `weighted_annual > 0` 表示实际植被状态相对于基准期气候态减小侵蚀。
+- `weighted_annual < 0` 表示实际植被状态相对于基准期气候态增加侵蚀。
+- 如果 `dynamic.nc` 含有多个 NDVI 成员，标准示例用 `collapse_ndvi_members()` 先取均值；正式不确定性分析可逐个 NDVI 成员重复上述流程。
+- 基准期决定反事实含义。例如 `1982-2000` 表示“后期 NDVI 与早期逐月平均植被状态相比”的减蚀效应。
 
 ## 7. 运行模式对比
 
