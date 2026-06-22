@@ -507,77 +507,116 @@ python scripts/plot_ssf_comparison.py \
   --force-split \
   --output figures/ssf_comparison_split.png
 ```
-## 6. Driver Attribution Analysis
+## 6. Vegetation Greening Erosion-Reduction Simulation
 
-Use [`scripts/attribution_analysis.py`](/mnt/d/code/sediment/scripts/attribution_analysis.py) to quantify how changes in `NDVI`, `T`, or `Pre` contribute to basin-scale hillslope sediment-supply change. This is different from [`CRSEM/sensitivity.py`](/mnt/d/code/sediment/CRSEM/sensitivity.py), which reports sensitivity and relative importance rather than cumulative contribution.
+Vegetation greening erosion-reduction simulation answers the question: compared with a counterfactual NDVI sequence without sustained greening, how much hillslope erosion did the actual NDVI change reduce? This is different from [`CRSEM/sensitivity.py`](../CRSEM/sensitivity.py): sensitivity analysis reports variable importance, while this simulation reports cumulative contribution.
 
-Method summary:
+Basic idea:
 
-- real scenario: run the model with the original driver series
-- counterfactual scenario: replace the target variable with the baseline climatological seasonal cycle
-- contribution definition: `ΔE = E_real - E_counterfactual`
-- execution path: always use `run_hillslope`, so `Q` and river routing are excluded
+- real scenario: run the hillslope erosion module with the original `NDVI` sequence
+- counterfactual scenario: replace `NDVI` with a baseline monthly climatology, for example the mean NDVI for each calendar month over 1982-2000
+- erosion reduction definition: `reduction = E_counterfactual - E_real`
+- if `reduction > 0`, the actual vegetation state reduced erosion relative to the baseline climatology
+- use `run_hillslope` so that the result isolates hillslope erosion and does not mix vegetation effects with river routing or discharge `Q`
 
-For ensemble NDVI inputs, the attribution script runs each `ndvi_member` separately and merges the outputs afterward. This differs from the standard calibration and simulation workflows, which collapse NDVI members to their mean before entering the model.
+### 6.1 Zhimenda Lightweight Example
 
-```bash
-python scripts/attribution_analysis.py \
-  --static example/tuotuohe/drivers/static.nc \
-  --dynamic example/tuotuohe/drivers/dynamic.nc \
-  --params example/tuotuohe_1990_2000/params.json \
-  --variable NDVI \
-  --analysis-start 1987 \
-  --analysis-end 2022 \
-  --baseline-start 1987 \
-  --baseline-end 2000 \
-  --output-dir example/tuotuohe/attribution
+The example below uses the bundled [`example/zhimenda_sample`](../example/zhimenda_sample) dataset to estimate the erosion reduction from actual NDVI during 2001-2019 relative to the 1982-2000 monthly NDVI climatology. Note that this `drivers/` directory is not a full two-dimensional spatial grid. It is a basin-mean sample aggregated from the full gridded Zhimenda drivers; the NetCDF files keep the minimum spatial dimensions `y=1, x=1`, but the data are effectively one-dimensional time-series drivers. This is suitable for demonstrating the workflow and checking that the code runs. Formal spatial analysis should use the full gridded driver data.
+
+```python
+from pathlib import Path
+
+import xarray as xr
+
+from CRSEM.batch_runner import run_parameter_batch
+from CRSEM.contracts import ParameterBatch
+from CRSEM.driver import BasinDriver
+
+base = Path("example/zhimenda_sample")
+
+# 1. Load the Zhimenda sample and collapse multi-source NDVI members.
+#    example/zhimenda_sample/drivers is a 1x1 basin-mean sample.
+#    It is effectively a one-dimensional time-series driver, not a full 2D grid driver.
+driver = BasinDriver.from_nc_files(
+    static_nc=base / "drivers/static.nc",
+    dynamic_nc=base / "drivers/dynamic.nc",
+    observations_nc=base / "drivers/observations.nc",
+    station_name="zhimenda",
+).collapse_ndvi_members()
+
+# 2. Convert to basin-mean point mode. The erosion-reduction analysis uses
+#    only hillslope processes, so Q/SSF do not need to be retained.
+driver = driver.to_point_driver(keep_rivers=False)
+
+# 3. Build the real and counterfactual scenarios.
+#    The counterfactual replaces 2001-2019 NDVI with the 1982-2000
+#    monthly climatology.
+real_driver = driver.crop_time_range(2001, 2019, align_to_obs=False)
+cf_driver = driver.to_cf_driver(
+    "NDVI",
+    baseline_start=1982,
+    baseline_end=2000,
+).crop_time_range(2001, 2019, align_to_obs=False)
+
+# 4. Load the calibrated parameter ensemble and run both scenarios.
+params, _ = ParameterBatch.from_file(
+    base / "params_1982_2000_kge_pbias_m120.json"
+)
+real_result = run_parameter_batch(
+    "crsem",
+    real_driver,
+    params,
+    run_method="run_hillslope",
+)
+cf_result = run_parameter_batch(
+    "crsem",
+    cf_driver,
+    params,
+    run_method="run_hillslope",
+)
+
+real = real_result.to_dataset()
+cf = cf_result.to_dataset()
+
+# 5. Calculate monthly, annual, and cumulative erosion reduction.
+#    E_hillslope is in t ha-1 month-1.
+#    driver.s_area is basin area in ha.
+monthly_reduction = cf["E_hillslope"] - real["E_hillslope"]
+annual_reduction = monthly_reduction.groupby("time.year").sum("time")
+
+if real_result.weights is not None:
+    weights = xr.DataArray(
+        real_result.weights,
+        dims=("member",),
+        coords={"member": annual_reduction.member},
+    )
+else:
+    weights = xr.ones_like(annual_reduction.isel(year=0)) / annual_reduction.sizes["member"]
+
+weighted_annual = (annual_reduction * weights).sum("member")
+cumulative_reduction_t = (weighted_annual * float(driver.s_area)).cumsum("year")
+
+print("Mean annual reduction (t ha-1 yr-1):", float(weighted_annual.mean()))
+print("Cumulative reduction (t):", float(cumulative_reduction_t.isel(year=-1)))
 ```
 
-Argument reference:
+For the current lightweight example, the script returns a positive cumulative erosion reduction, meaning that actual NDVI during 2001-2019 reduced hillslope erosion relative to the 1982-2000 NDVI climatology. Because this is a 1x1 basin-mean sample, the values are intended mainly to demonstrate the method. Formal studies should use full spatial drivers and quantify uncertainty from NDVI products, parameter ensembles, and baseline-period selection.
 
-| Argument | Meaning |
-|------|------|
-| `--static` | `static.nc` from the prepared driver directory |
-| `--dynamic` | `dynamic.nc` from the prepared driver directory |
-| `--observations` | optional `observations.nc`; ignored by the current attribution workflow because routing is not used |
-| `--params` | calibrated parameter ensemble file `params.json` |
-| `--variable` | variable to attribute, one of `NDVI`, `T`, `Pre` |
-| `--analysis-start` / `--analysis-end` | attribution simulation period; defaults to the full `dynamic.nc` time range |
-| `--baseline-start` / `--baseline-end` | baseline period used to build the counterfactual |
-| `--output-dir` | output directory |
-| `--no-point-mode` | keep spatial dimensions instead of converting to basin-average point mode |
+### 6.2 Interpretation
 
-Output variables:
-
-| Variable | Meaning | Units |
+| Quantity | Meaning | Units |
 |------|------|------|
-| `delta_annual` | annual contribution; when `E_hillslope` is available it is stored as annual change in hillslope erosion modulus | `t ha-1 yr-1` |
-| `delta_cumulative` | cumulative basin-total contribution after multiplying `delta_annual` by basin area and applying `cumsum` | `t` |
+| `monthly_reduction` | monthly hillslope erosion-modulus reduction, `E_cf - E_real` | `t ha-1 month-1` |
+| `annual_reduction` | annual hillslope erosion-modulus reduction | `t ha-1 yr-1` |
+| `weighted_annual` | annual reduction after parameter-ensemble weighting | `t ha-1 yr-1` |
+| `cumulative_reduction_t` | cumulative total reduction after multiplying annual reduction by basin area | `t` |
 
-Dimension notes:
+Interpretation notes:
 
-- `time`: annual time axis
-- `member`: parameter ensemble member
-- `ndvi_member`: NDVI ensemble member, present only when `NDVI` has an ensemble dimension
-
-Interpretation:
-
-- `delta_cumulative < 0` indicates a cumulative erosion-reduction effect relative to the baseline climatology
-- `delta_cumulative > 0` indicates a cumulative erosion-increase effect
-- for a single basin summary, a parameter-weighted average across `member` is usually the first aggregation step before comparing `ndvi_member`
-
-A bundled Tuotuohe example result is provided at:
-
-- [`example/tuotuohe/attribution/attribution_NDVI_1987_2000.nc`](/mnt/d/code/sediment/example/tuotuohe/attribution/attribution_NDVI_1987_2000.nc)
-
-You can turn the attribution NetCDF into a summary figure with [`scripts/plot_ndvi_attribution_analysis.py`](/mnt/d/code/sediment/scripts/plot_ndvi_attribution_analysis.py):
-
-```bash
-python scripts/plot_ndvi_attribution_analysis.py \
-  --attribution-nc example/tuotuohe/attribution/attribution_NDVI_1987_2000.nc \
-  --dynamic-nc example/tuotuohe/drivers/dynamic.nc \
-  --output example/tuotuohe/attribution/attribution_NDVI_1987_2000.png
-```
+- `weighted_annual > 0` means actual vegetation reduced erosion relative to the baseline climatology.
+- `weighted_annual < 0` means actual vegetation increased erosion relative to the baseline climatology.
+- If `dynamic.nc` contains multiple NDVI members, the standard example uses `collapse_ndvi_members()` to average them first. For formal uncertainty analysis, repeat the workflow for each NDVI member.
+- The baseline period controls the counterfactual meaning. For example, `1982-2000` means "later NDVI compared with the early-period monthly average vegetation state."
 
 ## 7. Run Mode Comparison
 
